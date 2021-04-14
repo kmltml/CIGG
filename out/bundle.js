@@ -82,15 +82,47 @@
         }
     }
 
+    class Bounds {
+        constructor(min, max) {
+            this.min = min;
+            this.max = max;
+        }
+        static fromPoints(points) {
+            const min = { ...points[0] };
+            const max = { ...points[0] };
+            for (let i = 1; i < points.length; i++) {
+                const { x, y } = points[i];
+                if (x < min.x)
+                    min.x = x;
+                if (x > max.x)
+                    max.x = x;
+                if (y < min.y)
+                    min.y = y;
+                if (y > max.y)
+                    max.y = y;
+            }
+            return new Bounds(min, max);
+        }
+        containsPoint(x, y) {
+            return x >= this.min.x && x <= this.max.x && y >= this.min.y && y <= this.max.y;
+        }
+        addMargin(x, y = x) {
+            return new Bounds({ x: this.min.x - x, y: this.min.y - y }, { x: this.max.x + x, y: this.max.y + y });
+        }
+    }
+
     class Segment {
         constructor() {
             this.switches = [];
             this.points = [];
+            this.net = undefined;
+            this.bounds = new Bounds({ x: 0, y: 0 }, { x: -1, y: -1 });
         }
         isActive() {
             return this.switches.some(sw => sw.state && sw.shape !== "diamond");
         }
         draw(ctxt) {
+            var _a;
             let activePoints = this.points.filter(p => {
                 if (p.state === undefined) {
                     return true;
@@ -105,11 +137,17 @@
                 }
             });
             if (activePoints.length <= 1) {
-                ctxt.strokeStyle = "rgba(0, 0, 0, 0.15)";
+                ctxt.strokeStyle = `rgba(0, 0, 0, 0.15)`;
                 activePoints = this.points;
             }
             else {
-                ctxt.strokeStyle = "rgba(0, 0, 0, 1.0)";
+                ctxt.strokeStyle = `rgba(0, 0, 0, 1.0)`;
+            }
+            if ((_a = this.net) === null || _a === void 0 ? void 0 : _a.highlighted) {
+                ctxt.lineWidth = 3;
+            }
+            else {
+                ctxt.lineWidth = 1;
             }
             ctxt.beginPath();
             ctxt.moveTo(activePoints[0].x, activePoints[0].y);
@@ -118,6 +156,7 @@
             }
             ctxt.stroke();
             ctxt.strokeStyle = "black";
+            ctxt.lineWidth = 1;
         }
         addSwitch(sw) {
             if (this.switches.includes(sw)) {
@@ -126,6 +165,8 @@
             this.switches.push(sw);
             this.points.push(sw);
             this.resortPoints();
+            this.bounds = Bounds.fromPoints(this.points).addMargin(2);
+            console.log(this.bounds);
         }
         resortPoints() {
             if (this.points.length <= 1) {
@@ -138,16 +179,6 @@
     function linspace(a, b, n) {
         const incr = (b - a) / (n - 1);
         return Array.from({ length: n }, (_, i) => a + i * incr);
-    }
-
-    class Bounds {
-        constructor(min, max) {
-            this.min = min;
-            this.max = max;
-        }
-        containsPoint(x, y) {
-            return x >= this.min.x && x <= this.max.x && y >= this.min.y && y <= this.max.y;
-        }
     }
 
     class Switch {
@@ -490,6 +521,38 @@
         }
     }
 
+    class Net {
+        constructor(segments) {
+            this.segments = segments;
+            this.highlighted = false;
+            segments.forEach(seg => seg.net = this);
+        }
+        static buildNets(segments) {
+            const nets = [];
+            const remainingSegments = new Set(segments);
+            const visit = (seg, visited) => {
+                if (visited.has(seg)) {
+                    return visited;
+                }
+                visited.add(seg);
+                seg.switches
+                    .filter(sw => sw.state)
+                    .flatMap(sw => sw.segments)
+                    .forEach(seg => visit(seg, visited));
+                return visited;
+            };
+            while (remainingSegments.size != 0) {
+                const seed = remainingSegments.values().next().value;
+                const segs = visit(seed, new Set());
+                console.log(segs);
+                segs.forEach(s => remainingSegments.delete(s));
+                const net = new Net(Array.from(segs));
+                nets.push(net);
+            }
+            return nets;
+        }
+    }
+
     document.addEventListener('DOMContentLoaded', () => {
         const canvas = document.getElementById('main-canvas');
         const ctxt = canvas.getContext('2d');
@@ -518,11 +581,13 @@
         grid.foreach(cell => cell.initSwitches(grid));
         const switches = [];
         const segments = [];
+        let highlightedNet = undefined;
         window.switches = switches;
         grid.foreach(cell => {
             switches.push(...cell.switches);
             segments.push(...cell.segments);
         });
+        let nets = Net.buildNets(segments);
         function redraw() {
             ctxt.resetTransform();
             ctxt.clearRect(0, 0, canvas.width, canvas.height);
@@ -534,6 +599,31 @@
             grid.foreach(cell => cell.draw(ctxt));
         }
         redraw();
+        canvas.addEventListener("mousemove", e => {
+            const rect = canvas.getBoundingClientRect();
+            const x = e.clientX - rect.left - 100;
+            const y = e.clientY - rect.top - 100;
+            for (let seg of segments) {
+                if (seg.bounds.containsPoint(x, y)) {
+                    if (seg.net !== highlightedNet) {
+                        if (highlightedNet !== undefined) {
+                            highlightedNet.highlighted = false;
+                        }
+                        highlightedNet = seg.net;
+                        if (highlightedNet !== undefined) {
+                            highlightedNet.highlighted = true;
+                        }
+                        redraw();
+                    }
+                    return;
+                }
+            }
+            if (highlightedNet !== undefined) {
+                highlightedNet.highlighted = false;
+                highlightedNet = undefined;
+                redraw();
+            }
+        });
         canvas.addEventListener("mousedown", e => {
             const rect = canvas.getBoundingClientRect();
             const x = e.clientX - rect.left - 100;
@@ -542,6 +632,7 @@
                 if (sw.bounds.containsPoint(x, y)) {
                     sw.state = !sw.state;
                     window.lastSwitch = sw;
+                    nets = Net.buildNets(segments);
                     redraw();
                 }
             }
