@@ -1,8 +1,14 @@
 import { Segment } from "./segment"
 
+export enum NetState {
+  Floating, Low, High, Error
+}
+
 export class Net {
 
   highlighted: boolean = false
+  state: NetState = NetState.Floating
+  nextState: NetState = NetState.Floating
 
   constructor(
     public segments: Segment[]
@@ -29,13 +35,34 @@ export class Net {
     while (remainingSegments.size != 0) {
       const seed = remainingSegments.values().next().value
       const segs = visit(seed, new Set())
-      console.log(segs)
       segs.forEach(s => remainingSegments.delete(s))
       const net = new Net(Array.from(segs))
       nets.push(net)
     }
 
     return nets
+  }
+
+  drive(high: boolean) {
+    const state = high ? NetState.High : NetState.Low
+    if (this.nextState === NetState.Floating) {
+      this.nextState = state
+    } else if (
+      (this.nextState === NetState.High ||
+        this.nextState === NetState.Low) &&
+        this.nextState !== state
+    ) {
+      this.nextState = NetState.Error
+    }
+  }
+
+  simulationStart() {
+    this.state = this.nextState = NetState.Floating
+  }
+
+  update() {
+    this.state = this.nextState
+    this.nextState = NetState.Floating
   }
 
 }

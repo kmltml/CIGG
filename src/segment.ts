@@ -1,6 +1,7 @@
 import { Switch } from "./switch"
-import { Net } from "./net"
+import { Net, NetState } from "./net"
 import { Bounds } from "./bounds"
+import { SimulationState } from "./simulation_state"
 
 export class Segment {
 
@@ -14,10 +15,60 @@ export class Segment {
   isActive(): boolean {
     return this.switches.some(sw => sw.state && sw.shape !== "diamond")
   }
-  
-  draw(ctxt: CanvasRenderingContext2D) {
+
+  draw(ctxt: CanvasRenderingContext2D, state: SimulationState) {
+    if (this.net?.highlighted) {
+      ctxt.lineWidth = 3
+    } else {
+      ctxt.lineWidth = 1
+    }
+
+    if (state.running) {
+      this.drawRunning(ctxt)
+    } else {
+      this.drawDesign(ctxt)
+    }
+
+    ctxt.strokeStyle = "black"
+    ctxt.lineWidth = 1
+  }
+
+  drawRunning(ctxt: CanvasRenderingContext2D) {
+    const activePoints = this.points.filter(p => {
+      if (p.state === undefined) {
+        return true
+      }
+      if (p.state) {
+        if (p.shape !== "diamond") {
+          return true
+        } else {
+          return (p as Switch).activeFor(this)
+        }
+      }
+    })
+
+    let color = ""
+    switch (this.net!.state) {
+      case NetState.Floating:
+        color = "#3870a8"
+        break
+      case NetState.Low:
+        color = "#808080"
+        break
+      case NetState.High:
+        color = "#000000"
+        break
+      case NetState.Error:
+        color = "#bd2600"
+        break
+    }
+
+    this.drawPoints(ctxt, activePoints, color)
+  }
+
+  drawDesign(ctxt: CanvasRenderingContext2D) {
     const points = this.points.filter(sw => sw.state || sw.shape !== "diamond")
-    
+
     const activePoints = points.filter(p => {
       if (p.state === undefined) {
         return true
@@ -29,10 +80,25 @@ export class Segment {
           return (p as Switch).activeFor(this)
         }
       }
-      
+
     })
 
-    const drawPoints = (points: {x: number, y: number}[], color: string) => {
+    if (activePoints.length != 0) {
+      this.drawPoints(ctxt, activePoints, "rgba(0, 0, 0, 1.0)")
+      const inactiveBefore =
+        points.slice(0, points.indexOf(activePoints[0]) + 1)
+          .filter(sw => sw.state || sw.shape !== "diamond")
+      this.drawPoints(ctxt, inactiveBefore, "rgba(0, 0, 0, 0.3)")
+      const inactiveAfter =
+        points.slice(points.indexOf(activePoints[activePoints.length - 1]))
+          .filter(sw => sw.state || sw.shape !== "diamond")
+      this.drawPoints(ctxt, inactiveAfter, "rgba(0, 0, 0, 0.3)")
+    } else {
+      this.drawPoints(ctxt, points.filter(sw => sw.state || sw.shape !== "diamond"), "rgba(0, 0, 0, 0.3)")
+    }
+  }
+
+  drawPoints(ctxt: CanvasRenderingContext2D, points: {x: number, y: number}[], color: string) {
       if (points.length <= 1) {
         return
       }
@@ -45,36 +111,11 @@ export class Segment {
       ctxt.stroke()
     }
 
-    
-    if (this.net?.highlighted) {
-      ctxt.lineWidth = 3
-    } else {
-      ctxt.lineWidth = 1
-    }
-    
-    if (activePoints.length != 0) {
-      drawPoints(activePoints, "rgba(0, 0, 0, 1.0)")
-      const inactiveBefore =
-        points.slice(0, points.indexOf(activePoints[0]) + 1)
-          .filter(sw => sw.state || sw.shape !== "diamond")
-      drawPoints(inactiveBefore, "rgba(0, 0, 0, 0.3)")
-      const inactiveAfter =
-        points.slice(points.indexOf(activePoints[activePoints.length - 1]))
-          .filter(sw => sw.state || sw.shape !== "diamond")
-      drawPoints(inactiveAfter, "rgba(0, 0, 0, 0.3)")      
-    } else {
-      drawPoints(points.filter(sw => sw.state || sw.shape !== "diamond"), "rgba(0, 0, 0, 0.3)")
-    }
-
-    ctxt.strokeStyle = "black"
-    ctxt.lineWidth = 1
-  }
-
   addSwitch(sw: Switch) {
     if (this.switches.includes(sw)) {
       return
     }
-    
+
     this.switches.push(sw)
     this.points.push(sw)
     this.resortPoints()
@@ -89,5 +130,5 @@ export class Segment {
 
     this.points.sort((a, b) => (a.x == b.x) ? a.y - b.y : a.x - b.x)
   }
-  
+
 }
