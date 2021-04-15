@@ -4,6 +4,8 @@ import { Switch } from './switch'
 import { Grid, Direction } from './grid'
 import { Wires } from './wires'
 import { BlockDriver } from "./block_driver"
+import { Net } from './net'
+import { Bounds } from './bounds'
 
 export class LogicBlock implements GridCell {
 
@@ -19,6 +21,7 @@ export class LogicBlock implements GridCell {
   connectingSegments: Map<Direction, Segment[]> = new Map()
 
   center: { x: number, y: number } = { x: 0, y: 0 }
+  bounds: Bounds = new Bounds({x: 0, y: 0}, {x: 0, y: 0})
 
   constructor(
     public x: number,
@@ -30,6 +33,7 @@ export class LogicBlock implements GridCell {
 
   initSegments(grid: Grid) {
     this.center = grid.displayCoords(this.x, this.y)
+    this.bounds = Bounds.fromPoints([this.center]).addMargin(LogicBlock.Size / 2)
     for (let dir of Object.keys(Direction)) {
       const cell = grid.neighbour(this.x, this.y, dir as Direction)
       if (cell.cellType == "wires") {
@@ -112,6 +116,14 @@ export class LogicBlock implements GridCell {
         })
       }
     }
+  }
+
+  update() {
+    const nets: Map<Direction, Net[]> = new Map()
+    for (let dir of this.connectingSegments.keys()) {
+      nets.set(dir, this.connectingSegments.get(dir)!.map(seg => seg.net!))
+    }
+    this.driver.driveOutputs(nets)
   }
 
 }

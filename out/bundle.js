@@ -82,6 +82,64 @@
         }
     }
 
+    var NetState;
+    (function (NetState) {
+        NetState[NetState["Floating"] = 0] = "Floating";
+        NetState[NetState["Low"] = 1] = "Low";
+        NetState[NetState["High"] = 2] = "High";
+        NetState[NetState["Error"] = 3] = "Error";
+    })(NetState || (NetState = {}));
+    class Net {
+        constructor(segments) {
+            this.segments = segments;
+            this.highlighted = false;
+            this.state = NetState.Floating;
+            this.nextState = NetState.Floating;
+            segments.forEach(seg => seg.net = this);
+        }
+        static buildNets(segments) {
+            const nets = [];
+            const remainingSegments = new Set(segments);
+            const visit = (seg, visited) => {
+                if (visited.has(seg)) {
+                    return visited;
+                }
+                visited.add(seg);
+                seg.switches
+                    .filter(sw => sw.state)
+                    .flatMap(sw => sw.segments)
+                    .forEach(seg => visit(seg, visited));
+                return visited;
+            };
+            while (remainingSegments.size != 0) {
+                const seed = remainingSegments.values().next().value;
+                const segs = visit(seed, new Set());
+                segs.forEach(s => remainingSegments.delete(s));
+                const net = new Net(Array.from(segs));
+                nets.push(net);
+            }
+            return nets;
+        }
+        drive(high) {
+            const state = high ? NetState.High : NetState.Low;
+            if (this.nextState === NetState.Floating) {
+                this.nextState = state;
+            }
+            else if ((this.nextState === NetState.High ||
+                this.nextState === NetState.Low) &&
+                this.nextState !== state) {
+                this.nextState = NetState.Error;
+            }
+        }
+        simulationStart() {
+            this.state = this.nextState = NetState.Floating;
+        }
+        update() {
+            this.state = this.nextState;
+            this.nextState = NetState.Floating;
+        }
+    }
+
     class Bounds {
         constructor(min, max) {
             this.min = min;
@@ -121,9 +179,25 @@
         isActive() {
             return this.switches.some(sw => sw.state && sw.shape !== "diamond");
         }
-        draw(ctxt) {
+        draw(ctxt, state) {
             var _a;
-            let activePoints = this.points.filter(p => {
+            if ((_a = this.net) === null || _a === void 0 ? void 0 : _a.highlighted) {
+                ctxt.lineWidth = 3;
+            }
+            else {
+                ctxt.lineWidth = 1;
+            }
+            if (state.running) {
+                this.drawRunning(ctxt);
+            }
+            else {
+                this.drawDesign(ctxt);
+            }
+            ctxt.strokeStyle = "black";
+            ctxt.lineWidth = 1;
+        }
+        drawRunning(ctxt) {
+            const activePoints = this.points.filter(p => {
                 if (p.state === undefined) {
                     return true;
                 }
@@ -136,27 +210,62 @@
                     }
                 }
             });
-            if (activePoints.length <= 1) {
-                ctxt.strokeStyle = `rgba(0, 0, 0, 0.15)`;
-                activePoints = this.points;
+            let color = "";
+            switch (this.net.state) {
+                case NetState.Floating:
+                    color = "#3870a8";
+                    break;
+                case NetState.Low:
+                    color = "#808080";
+                    break;
+                case NetState.High:
+                    color = "#000000";
+                    break;
+                case NetState.Error:
+                    color = "#bd2600";
+                    break;
+            }
+            this.drawPoints(ctxt, activePoints, color);
+        }
+        drawDesign(ctxt) {
+            const points = this.points.filter(sw => sw.state || sw.shape !== "diamond");
+            const activePoints = points.filter(p => {
+                if (p.state === undefined) {
+                    return true;
+                }
+                if (p.state) {
+                    if (p.shape !== "diamond") {
+                        return true;
+                    }
+                    else {
+                        return p.activeFor(this);
+                    }
+                }
+            });
+            if (activePoints.length != 0) {
+                this.drawPoints(ctxt, activePoints, "rgba(0, 0, 0, 1.0)");
+                const inactiveBefore = points.slice(0, points.indexOf(activePoints[0]) + 1)
+                    .filter(sw => sw.state || sw.shape !== "diamond");
+                this.drawPoints(ctxt, inactiveBefore, "rgba(0, 0, 0, 0.3)");
+                const inactiveAfter = points.slice(points.indexOf(activePoints[activePoints.length - 1]))
+                    .filter(sw => sw.state || sw.shape !== "diamond");
+                this.drawPoints(ctxt, inactiveAfter, "rgba(0, 0, 0, 0.3)");
             }
             else {
-                ctxt.strokeStyle = `rgba(0, 0, 0, 1.0)`;
+                this.drawPoints(ctxt, points.filter(sw => sw.state || sw.shape !== "diamond"), "rgba(0, 0, 0, 0.3)");
             }
-            if ((_a = this.net) === null || _a === void 0 ? void 0 : _a.highlighted) {
-                ctxt.lineWidth = 3;
+        }
+        drawPoints(ctxt, points, color) {
+            if (points.length <= 1) {
+                return;
             }
-            else {
-                ctxt.lineWidth = 1;
-            }
+            ctxt.strokeStyle = color;
             ctxt.beginPath();
-            ctxt.moveTo(activePoints[0].x, activePoints[0].y);
-            for (let i = 1; i < activePoints.length; i++) {
-                ctxt.lineTo(activePoints[i].x, activePoints[i].y);
+            ctxt.moveTo(points[0].x, points[0].y);
+            for (let i = 1; i < points.length; i++) {
+                ctxt.lineTo(points[i].x, points[i].y);
             }
             ctxt.stroke();
-            ctxt.strokeStyle = "black";
-            ctxt.lineWidth = 1;
         }
         addSwitch(sw) {
             if (this.switches.includes(sw)) {
@@ -378,9 +487,11 @@
             this.switches = [];
             this.connectingSegments = new Map();
             this.center = { x: 0, y: 0 };
+            this.bounds = new Bounds({ x: 0, y: 0 }, { x: 0, y: 0 });
         }
         initSegments(grid) {
             this.center = grid.displayCoords(this.x, this.y);
+            this.bounds = Bounds.fromPoints([this.center]).addMargin(LogicBlock.Size / 2);
             for (let dir of Object.keys(Direction)) {
                 const cell = grid.neighbour(this.x, this.y, dir);
                 if (cell.cellType == "wires") {
@@ -453,6 +564,13 @@
                 }
             }
         }
+        update() {
+            const nets = new Map();
+            for (let dir of this.connectingSegments.keys()) {
+                nets.set(dir, this.connectingSegments.get(dir).map(seg => seg.net));
+            }
+            this.driver.driveOutputs(nets);
+        }
     }
     LogicBlock.Size = 90;
     LogicBlock.WireMargin = 10;
@@ -511,45 +629,51 @@
                     return ["Y", "D"];
             }
         }
+        driveOutputs(nets) {
+            var _a, _b, _c, _d, _e, _f, _g, _h, _j, _k, _l, _m;
+            const inputs = [];
+            const addInput = (net) => {
+                if (net === undefined) {
+                    return;
+                }
+                if (net.state === NetState.High) {
+                    inputs.push(true);
+                }
+                else if (net.state === NetState.Low) {
+                    inputs.push(false);
+                }
+            };
+            addInput((_a = nets.get(Direction.North)) === null || _a === void 0 ? void 0 : _a[0]);
+            addInput((_b = nets.get(Direction.East)) === null || _b === void 0 ? void 0 : _b[0]);
+            addInput((_c = nets.get(Direction.South)) === null || _c === void 0 ? void 0 : _c[1]);
+            addInput((_d = nets.get(Direction.West)) === null || _d === void 0 ? void 0 : _d[1]);
+            const res = !inputs.every(x => x);
+            (_f = (_e = nets.get(Direction.North)) === null || _e === void 0 ? void 0 : _e[1]) === null || _f === void 0 ? void 0 : _f.drive(res);
+            (_h = (_g = nets.get(Direction.East)) === null || _g === void 0 ? void 0 : _g[1]) === null || _h === void 0 ? void 0 : _h.drive(res);
+            (_k = (_j = nets.get(Direction.South)) === null || _j === void 0 ? void 0 : _j[0]) === null || _k === void 0 ? void 0 : _k.drive(res);
+            (_m = (_l = nets.get(Direction.West)) === null || _l === void 0 ? void 0 : _l[0]) === null || _m === void 0 ? void 0 : _m.drive(res);
+        }
     }
     class InterfaceDriver {
+        constructor() {
+            this.state = false;
+        }
         ioWireCount(direction) {
             return 1;
         }
         ioWireLabels(direction) {
             return [""];
         }
+        driveOutputs(nets) {
+            for (let dir of nets.values()) {
+                dir.forEach(net => net.drive(this.state));
+            }
+        }
     }
 
-    class Net {
-        constructor(segments) {
-            this.segments = segments;
-            this.highlighted = false;
-            segments.forEach(seg => seg.net = this);
-        }
-        static buildNets(segments) {
-            const nets = [];
-            const remainingSegments = new Set(segments);
-            const visit = (seg, visited) => {
-                if (visited.has(seg)) {
-                    return visited;
-                }
-                visited.add(seg);
-                seg.switches
-                    .filter(sw => sw.state)
-                    .flatMap(sw => sw.segments)
-                    .forEach(seg => visit(seg, visited));
-                return visited;
-            };
-            while (remainingSegments.size != 0) {
-                const seed = remainingSegments.values().next().value;
-                const segs = visit(seed, new Set());
-                console.log(segs);
-                segs.forEach(s => remainingSegments.delete(s));
-                const net = new Net(Array.from(segs));
-                nets.push(net);
-            }
-            return nets;
+    class SimulationState {
+        constructor() {
+            this.running = false;
         }
     }
 
@@ -588,14 +712,19 @@
             segments.push(...cell.segments);
         });
         let nets = Net.buildNets(segments);
+        let simstate = new SimulationState();
         function redraw() {
             ctxt.resetTransform();
             ctxt.clearRect(0, 0, canvas.width, canvas.height);
             ctxt.translate(100, 100);
-            switches.forEach(s => s.draw(ctxt));
+            switches.forEach(s => {
+                if ((s.state && s.shape !== "diamond") || !simstate.running) {
+                    s.draw(ctxt);
+                }
+            });
             switches.forEach(s => s.clearActive());
             switches.forEach(s => s.updateActive());
-            segments.forEach(s => s.draw(ctxt));
+            segments.forEach(s => s.draw(ctxt, simstate));
             grid.foreach(cell => cell.draw(ctxt));
         }
         redraw();
@@ -628,6 +757,13 @@
             const rect = canvas.getBoundingClientRect();
             const x = e.clientX - rect.left - 100;
             const y = e.clientY - rect.top - 100;
+            grid.foreach(cell => {
+                if (cell instanceof LogicBlock && cell.bounds.containsPoint(x, y)) {
+                    if (cell.driver instanceof InterfaceDriver) {
+                        cell.driver.state = !cell.driver.state;
+                    }
+                }
+            });
             for (let sw of switches) {
                 if (sw.bounds.containsPoint(x, y)) {
                     sw.state = !sw.state;
@@ -635,6 +771,22 @@
                     nets = Net.buildNets(segments);
                     redraw();
                 }
+            }
+        });
+        document.addEventListener("keydown", e => {
+            if (e.key === " ") {
+                simstate.running = !simstate.running;
+                nets.forEach(net => net.simulationStart());
+                redraw();
+            }
+            else if (simstate.running && e.key === "s") {
+                grid.foreach(cell => {
+                    if (cell instanceof LogicBlock) {
+                        cell.update();
+                    }
+                });
+                nets.forEach(net => net.update());
+                redraw();
             }
         });
     });

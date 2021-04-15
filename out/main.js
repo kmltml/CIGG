@@ -4,6 +4,7 @@ import { LogicBlock } from "./logic_block";
 import { Wires } from "./wires";
 import { InterfaceDriver, LutDriver } from "./block_driver";
 import { Net } from "./net";
+import { SimulationState } from "./simulation_state";
 document.addEventListener('DOMContentLoaded', () => {
     const canvas = document.getElementById('main-canvas');
     const ctxt = canvas.getContext('2d');
@@ -40,14 +41,19 @@ document.addEventListener('DOMContentLoaded', () => {
         segments.push(...cell.segments);
     });
     let nets = Net.buildNets(segments);
+    let simstate = new SimulationState();
     function redraw() {
         ctxt.resetTransform();
         ctxt.clearRect(0, 0, canvas.width, canvas.height);
         ctxt.translate(100, 100);
-        switches.forEach(s => s.draw(ctxt));
+        switches.forEach(s => {
+            if ((s.state && s.shape !== "diamond") || !simstate.running) {
+                s.draw(ctxt);
+            }
+        });
         switches.forEach(s => s.clearActive());
         switches.forEach(s => s.updateActive());
-        segments.forEach(s => s.draw(ctxt));
+        segments.forEach(s => s.draw(ctxt, simstate));
         grid.foreach(cell => cell.draw(ctxt));
     }
     redraw();
@@ -80,6 +86,13 @@ document.addEventListener('DOMContentLoaded', () => {
         const rect = canvas.getBoundingClientRect();
         const x = e.clientX - rect.left - 100;
         const y = e.clientY - rect.top - 100;
+        grid.foreach(cell => {
+            if (cell instanceof LogicBlock && cell.bounds.containsPoint(x, y)) {
+                if (cell.driver instanceof InterfaceDriver) {
+                    cell.driver.state = !cell.driver.state;
+                }
+            }
+        });
         for (let sw of switches) {
             if (sw.bounds.containsPoint(x, y)) {
                 sw.state = !sw.state;
@@ -87,6 +100,22 @@ document.addEventListener('DOMContentLoaded', () => {
                 nets = Net.buildNets(segments);
                 redraw();
             }
+        }
+    });
+    document.addEventListener("keydown", e => {
+        if (e.key === " ") {
+            simstate.running = !simstate.running;
+            nets.forEach(net => net.simulationStart());
+            redraw();
+        }
+        else if (simstate.running && e.key === "s") {
+            grid.foreach(cell => {
+                if (cell instanceof LogicBlock) {
+                    cell.update();
+                }
+            });
+            nets.forEach(net => net.update());
+            redraw();
         }
     });
 });

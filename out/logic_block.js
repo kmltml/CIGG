@@ -1,6 +1,7 @@
 import { Segment } from './segment';
 import { Switch } from './switch';
 import { Direction } from './grid';
+import { Bounds } from './bounds';
 export class LogicBlock {
     constructor(x, y, driver) {
         this.x = x;
@@ -11,9 +12,11 @@ export class LogicBlock {
         this.switches = [];
         this.connectingSegments = new Map();
         this.center = { x: 0, y: 0 };
+        this.bounds = new Bounds({ x: 0, y: 0 }, { x: 0, y: 0 });
     }
     initSegments(grid) {
         this.center = grid.displayCoords(this.x, this.y);
+        this.bounds = Bounds.fromPoints([this.center]).addMargin(LogicBlock.Size / 2);
         for (let dir of Object.keys(Direction)) {
             const cell = grid.neighbour(this.x, this.y, dir);
             if (cell.cellType == "wires") {
@@ -86,6 +89,13 @@ export class LogicBlock {
                 });
             }
         }
+    }
+    update() {
+        const nets = new Map();
+        for (let dir of this.connectingSegments.keys()) {
+            nets.set(dir, this.connectingSegments.get(dir).map(seg => seg.net));
+        }
+        this.driver.driveOutputs(nets);
     }
 }
 LogicBlock.Size = 90;
